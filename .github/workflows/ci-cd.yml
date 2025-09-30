@@ -26,6 +26,15 @@ jobs:
           node-version: '20'
           #cache: 'npm'
       
+      - name: Cache dependencies (Users)
+        uses: actions/cache@v4
+        id: users-cache
+        with:
+          path: backend/users/node_modules
+          key: ${{ runner.os }}-users-${{ hashFiles('backend/users/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-users-
+ 
       # 1. Instalar y correr tests del Backend (Users)
       - name: Install & Test Users Service
         run: |
