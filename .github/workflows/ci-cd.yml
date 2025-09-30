@@ -1,0 +1,114 @@
+# .github/workflows/ci-cd.yml
+
+name: CI/CD Pipeline - Task Manager
+
+on:
+  push:
+    branches:
+      - main # Ejecutar cuando se haga push a 'main'
+      - master
+  pull_request: # Ejecutar en PR para la fase de CI (tests)
+    branches:
+      - main
+      - master
+
+jobs:
+  # FASE 1: INTEGRACIÓN CONTINUA (Tests y Build del código)
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      # 1. Instalar y correr tests del Backend (Users)
+      - name: Install & Test Users Service
+        run: |
+          cd backend/users
+          npm ci # Instalación limpia
+          # npm run test:ci # Habilitar cuando tengas tests
+      
+      # 2. Instalar y correr tests del Backend (Tasks)
+      - name: Install & Test Tasks Service
+        run: |
+          cd backend/tasks
+          npm ci
+          # npm run test:ci
+
+      # 3. Instalar y correr tests del Frontend
+      - name: Install & Build Web Client
+        run: |
+          cd frontend/web-client
+          npm ci
+          # npm run test:ci
+          npm run build # Validar que el build de Next.js/React funciona
+          
+  # FASE 2: DESPLIEGUE CONTINUO (Build y Push de Imágenes Docker)
+  cd:
+    needs: ci # Solo se ejecuta si la fase CI pasa
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' # Solo en push a la rama principal
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+          
+      # Definir la etiqueta de la imagen para seguimiento
+      - name: Define Image Tag
+        id: image
+        run: echo "TAG=latest" >> $GITHUB_OUTPUT
+
+      # 1. Construir y Publicar Users Service
+      - name: Build and Push Users Service
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend/users
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/task-manager-users:${{ steps.image.outputs.TAG }}
+
+      # 2. Construir y Publicar Tasks Service
+      - name: Build and Push Tasks Service
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend/tasks
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/task-manager-tasks:${{ steps.image.outputs.TAG }}
+          
+      # 3. Construir y Publicar Web Client
+      - name: Build and Push Web Client
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend/web-client
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/task-manager-web:${{ steps.image.outputs.TAG }}
+
+      # 4. PASO DE DESPLIEGUE (Reemplazar con tu propia lógica)
+      - name: Deploy to Server via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            # Este script se ejecuta en tu servidor remoto
+            echo "Pulling latest images and restarting containers..."
+            docker pull ${{ secrets.DOCKER_USERNAME }}/task-manager-users:latest
+            docker pull ${{ secrets.DOCKER_USERNAME }}/task-manager-tasks:latest
+            docker pull ${{ secrets.DOCKER_USERNAME }}/task-manager-web:latest
+            # Ejecutar docker-compose para levantar los servicios con las nuevas imágenes
+            # docker-compose -f /ruta/a/tu/docker-compose.yml up -d
+            echo "Deployment finished."

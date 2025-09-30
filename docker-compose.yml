@@ -1,0 +1,47 @@
+version: '3.8'
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb_task_manager
+    ports:
+      - '27017:27017'
+    volumes:
+      - mongodb_data:/data/db
+
+  users-service:
+    build:
+      context: ./backend/users
+    depends_on:
+      - mongodb
+    environment:
+      MONGODB_URI: mongodb://mongodb:27017/task_manager_db #
+      PORT: 3000
+    ports:
+      - '3000:3000'
+
+  tasks-service:
+    build:
+      context: ./backend/tasks
+    depends_on:
+      - mongodb
+    environment:
+      MONGODB_URI: mongodb://mongodb:27017/task_manager_db
+      PORT: 3001
+    ports:
+      - '3001:3001'
+
+  web-client:
+    build:
+      context: ./frontend/web-client
+    depends_on:
+      - users-service
+      - tasks-service
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_USERS_API_URL: http://users-service:3000
+      NEXT_PUBLIC_TASKS_API_URL: http://tasks-service:3001
+    ports:
+      - '80:3000'
+
+volumes:
+  mongodb_data:
