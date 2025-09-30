@@ -15,7 +15,7 @@ import { MongooseModule } from '@nestjs/mongoose';
     }),
     MongooseModule.forRootAsync({
       useFactory: () => ({
-        uri: process.env.MONGODB_URI,
+        uri: process.env.MONGODB_ATLAS_URI,
       }),
     }),
     // ... aquí van tus módulos de Features (UsersModule, TasksModule)

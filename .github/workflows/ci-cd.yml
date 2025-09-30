@@ -1,16 +1,21 @@
-# .github/workflows/ci-cd.yml
+# .github/workflows/ci-cd.yml (Versión optimizada para Cloud Run y Monorepo)
 
 name: CI/CD Pipeline - Task Manager
 
 on:
   push:
     branches:
-      - main # Ejecutar cuando se haga push a 'main'
+      - main
       - master
-  pull_request: # Ejecutar en PR para la fase de CI (tests)
+  pull_request:
     branches:
       - main
       - master
+
+env:
+  # Configuración global de la región de GCP y el nombre del repositorio
+  GCP_REGION: us-central1
+  AR_REPO_NAME: task-manager-repo
 
 jobs:
   # FASE 1: INTEGRACIÓN CONTINUA (Tests y Build del código)
@@ -20,104 +25,129 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          #cache: 'npm'
-      
-      - name: Cache dependencies (Users)
-        uses: actions/cache@v4
-        id: users-cache
-        with:
-          path: backend/users/node_modules
-          key: ${{ runner.os }}-users-${{ hashFiles('backend/users/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-users-
- 
-      # 1. Instalar y correr tests del Backend (Users)
-      - name: Install & Test Users Service
-        run: |
-          cd backend/users
-          npm ci # Instalación limpia
-          # npm run test:ci # Habilitar cuando tengas tests
-      
-      # 2. Instalar y correr tests del Backend (Tasks)
-      - name: Install & Test Tasks Service
-        run: |
-          cd backend/tasks
-          npm ci
-          # npm run test:ci
 
-      # 3. Instalar y correr tests del Frontend
+      # --- [ Optimización de Cache ] ---
+
+      - name: Cache dependencies (Backend)
+        uses: actions/cache@v4
+        with:
+          path: |
+            backend/users/node_modules
+            backend/tasks/node_modules
+          key: ${{ runner.os }}-backend-${{ hashFiles('backend/users/package-lock.json', 'backend/tasks/package-lock.json') }}
+
+      - name: Cache dependencies (Frontend)
+        uses: actions/cache@v4
+        with:
+          path: frontend/web-client/node_modules
+          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/web-client/package-lock.json') }}
+
+      # --- [ Instalación y Pruebas ] ---
+
+      - name: Install & Test Users Service
+        run: cd backend/users && npm ci && npm run build
+        # Quitar '&& npm run build' si quieres separarlo del CI
+      
+      - name: Install & Test Tasks Service
+        run: cd backend/tasks && npm ci && npm run build
+
       - name: Install & Build Web Client
-        run: |
-          cd frontend/web-client
-          npm ci
-          # npm run test:ci
-          npm run build # Validar que el build de Next.js/React funciona
+        run: cd frontend/web-client && npm ci && npm run build
           
-  # FASE 2: DESPLIEGUE CONTINUO (Build y Push de Imágenes Docker)
+  # --------------------------------------------------------------------------------------------------------------------------------------------------
+  
+  # FASE 2: DESPLIEGUE CONTINUO (Build y Push a Google Cloud Run)
   cd:
-    needs: ci # Solo se ejecuta si la fase CI pasa
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' # Solo en push a la rama principal
+    needs: ci
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
         
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
+      # 1. Autenticación en Google Cloud (Usa el Service Account Key)
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
           
-      # Definir la etiqueta de la imagen para seguimiento
-      - name: Define Image Tag
-        id: image
-        run: echo "TAG=latest" >> $GITHUB_OUTPUT
+      # 2. Configurar Docker para Artifact Registry (Necesario para el push)
+      - name: Set up Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev
 
-      # 1. Construir y Publicar Users Service
+      # --- [ Build, Tag y Push a Artifact Registry ] ---
+      
+      # Genera la URI base del registro: [region]-docker.pkg.dev/[project-id]/[repo-name]
+      - name: Set Artifact Registry URI
+        id: ar_uri
+        run: echo "URI=${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.AR_REPO_NAME }}" >> $GITHUB_OUTPUT
+
+      # 3. Build y Push de Users Service
       - name: Build and Push Users Service
-        uses: docker/build-push-action@v5
-        with:
-          context: ./backend/users
-          push: true
-          tags: ${{ secrets.DOCKER_USERNAME }}/task-manager-users:${{ steps.image.outputs.TAG }}
+        run: |
+          IMAGE_URI=${{ steps.ar_uri.outputs.URI }}/users:latest
+          docker build -t $IMAGE_URI ./backend/users
+          docker push $IMAGE_URI
 
-      # 2. Construir y Publicar Tasks Service
+      # 4. Build y Push de Tasks Service
       - name: Build and Push Tasks Service
-        uses: docker/build-push-action@v5
-        with:
-          context: ./backend/tasks
-          push: true
-          tags: ${{ secrets.DOCKER_USERNAME }}/task-manager-tasks:${{ steps.image.outputs.TAG }}
+        run: |
+          IMAGE_URI=${{ steps.ar_uri.outputs.URI }}/tasks:latest
+          docker build -t $IMAGE_URI ./backend/tasks
+          docker push $IMAGE_URI
           
-      # 3. Construir y Publicar Web Client
+      # 5. Build y Push de Web Client
       - name: Build and Push Web Client
-        uses: docker/build-push-action@v5
-        with:
-          context: ./frontend/web-client
-          push: true
-          tags: ${{ secrets.DOCKER_USERNAME }}/task-manager-web:${{ steps.image.outputs.TAG }}
+        run: |
+          IMAGE_URI=${{ steps.ar_uri.outputs.URI }}/web:latest
+          docker build -t $IMAGE_URI ./frontend/web-client
+          docker push $IMAGE_URI
 
-      # 4. PASO DE DESPLIEGUE (Reemplazar con tu propia lógica)
-      - name: Deploy to Server via SSH
-        uses: appleboy/ssh-action@v1.0.3
+      # --- [ Despliegue en Cloud Run (Free Tier) ] ---
+      
+      # 6. Despliegue del Users Service (Authentication/Auth)
+      - name: Deploy Users Service to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USERNAME }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            # Este script se ejecuta en tu servidor remoto
-            echo "Pulling latest images and restarting containers..."
-            docker pull ${{ secrets.DOCKER_USERNAME }}/task-manager-users:latest
-            docker pull ${{ secrets.DOCKER_USERNAME }}/task-manager-tasks:latest
-            docker pull ${{ secrets.DOCKER_USERNAME }}/task-manager-web:latest
-            # Ejecutar docker-compose para levantar los servicios con las nuevas imágenes
-            # docker-compose -f /ruta/a/tu/docker-compose.yml up -d
-            echo "Deployment finished."
+          service: users-service
+          region: ${{ env.GCP_REGION }}
+          image: ${{ steps.ar_uri.outputs.URI }}/users:latest
+          min-instances: 0 # Clave para el Free Tier
+          # Se inyecta la URI de MongoDB Atlas
+          env-vars: |
+            MONGODB_ATLAS_URI=${{ secrets.MONGODB_ATLAS_URI }}
+            PORT=8080 # Cloud Run espera que el contenedor escuche en 8080
+
+      # 7. Despliegue del Tasks Service (Tareas)
+      - name: Deploy Tasks Service to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: tasks-service
+          region: ${{ env.GCP_REGION }}
+          image: ${{ steps.ar_uri.outputs.URI }}/tasks:latest
+          min-instances: 0
+          # Aquí se comunica con el servicio de Usuarios
+          env-vars: |
+            MONGODB_ATLAS_URI=${{ secrets.MONGODB_ATLAS_URI }}
+            USERS_SERVICE_URL=http://users-service.{{ env.GCP_REGION }}.run.app # URL interna de Cloud Run
+            PORT=8080
+            
+      # 8. Despliegue del Web Client (Frontend)
+      - name: Deploy Web Client to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: web-client
+          region: ${{ env.GCP_REGION }}
+          image: ${{ steps.ar_uri.outputs.URI }}/web:latest
+          min-instances: 0
+          # El frontend necesita saber la URL pública del backend
+          env-vars: |
+            NEXT_PUBLIC_USERS_API_URL=https://users-service-${{ secrets.GCP_PROJECT_ID }}.${{ env.GCP_REGION }}.run.app
+            NEXT_PUBLIC_TASKS_API_URL=https://tasks-service-${{ secrets.GCP_PROJECT_ID }}.${{ env.GCP_REGION }}.run.app
+            PORT=8080
