@@ -118,11 +118,12 @@ jobs:
           service: users-service
           region: ${{ env.GCP_REGION }}
           image: ${{ steps.ar_uri.outputs.URI }}/users:latest
-          min-instances: 0 # Clave para el Free Tier
-          # Se inyecta la URI de MongoDB Atlas
-          env-vars: |
+          
+          # ¡CORRECCIÓN! Usar 'flags' y 'env_vars'
+          flags: --min-instances 0  # <--- Corregido
+          env_vars: | # <--- Corregido
             MONGODB_ATLAS_URI=${{ secrets.MONGODB_ATLAS_URI }}
-            PORT=8080 # Cloud Run espera que el contenedor escuche en 8080
+            PORT=8080 
 
       # 7. Despliegue del Tasks Service (Tareas)
       - name: Deploy Tasks Service to Cloud Run
