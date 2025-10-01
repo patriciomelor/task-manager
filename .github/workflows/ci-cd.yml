@@ -123,7 +123,7 @@ jobs:
           flags: --min-instances 0  # <--- Corregido
           env_vars: | # <--- Corregido
             MONGODB_ATLAS_URI=${{ secrets.MONGODB_ATLAS_URI }}
-            PORT=8080 
+          # PORT=8080 
 
       # 7. Despliegue del Tasks Service (Tareas)
       - name: Deploy Tasks Service to Cloud Run
